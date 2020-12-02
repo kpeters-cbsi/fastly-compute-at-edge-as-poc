@@ -61,12 +61,42 @@ function main(req: Request): Response {
   } else if (path == '/spacex') {
     Console.log('Requesting SpaceX test\n')
     text = testRequestSpaceX()
-    Console.log('SpaceX request successful')
+    Console.log('SpaceX request successful\n')
   } else {
     text = 'Unrecognized request. Path "' + path + '"'
     status = 400
   }
   Console.log('Text: ' + text)
+  const parsed = <JSON.Obj>JSON.parse(text)
+  if (parsed.has('tle')) {
+    const tle = <string>parsed.get('tle')!.toString()
+    Console.log('tle: ' + tle + '\n')
+    return new Response(String.UTF8.encode(tle), {
+      status,
+    })
+  } else if (parsed.has('data')) {
+    const data = <JSON.Obj>parsed.get('data')
+    const payload = <JSON.Obj>data.get('payload')
+    if (payload) {
+      if (payload.has('norad_id')) {
+        const norad_ids = <JSON.Arr>payload.get('norad_id')
+        Console.log('norad ID 0: ' + norad_ids._arr[0].toString() + '\n')
+        Console.log(
+          'norad ID 0 + 1: ' +
+            (Number.parseInt(norad_ids._arr[0].toString()) + 1).toString() +
+            '\n'
+        )
+        if (Array.isArray(norad_ids)) {
+          Console.log(`norad ids is an array\n`)
+        } else {
+          Console.log(`norad ids is not an array\n`)
+        }
+        return new Response(String.UTF8.encode(norad_ids.toString()), {
+          status,
+        })
+      }
+    }
+  }
   return new Response(String.UTF8.encode(text), {
     status,
   })
@@ -130,7 +160,13 @@ interface doRequestParams {
   headers: Headers | null
 }
 
-function doRequest(method: string, uri: string, backend: string, headers: Headers = new Headers(), body: string = ''): Response {
+function doRequest(
+  method: string,
+  uri: string,
+  backend: string,
+  headers: Headers = new Headers(),
+  body: string = ''
+): Response {
   const init: RequestInit = {
     method: method,
     headers: headers || new Headers(),
