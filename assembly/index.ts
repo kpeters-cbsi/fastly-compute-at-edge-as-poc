@@ -1,4 +1,10 @@
-import { Request, Response, Fastly, Headers } from '@fastly/as-compute'
+import {
+  Request,
+  Response,
+  Fastly,
+  Headers,
+  RequestInit,
+} from '@fastly/as-compute'
 import { JSON } from 'assemblyscript-json'
 import { Console } from 'as-wasi'
 // The name of a backend server associated with this service.
@@ -61,7 +67,6 @@ function main(req: Request): Response {
     status = 400
   }
   Console.log('Text: ' + text)
-  Console.log('Text again: ' + text)
   return new Response(String.UTF8.encode(text), {
     status,
   })
@@ -117,32 +122,47 @@ let resp = main(req)
 // Send the response back to the client.
 Fastly.respondWith(resp)
 
-function testRequestSpaceX(): string {
-  Console.log('test request for spacex\n')
-  const query =
-    '{"query":"{ payload(id: \\"Thaicom 6\\") { norad_id } }","variables":{}}'
-  Console.log('query: ' + query + '\n')
-  const headers = new Headers()
-  const method = 'POST'
-  const url = spaceXUri
-  const body = query
-  headers.set('Content-Type', 'application/json')
-  Console.log('Set "Content-Type" of "application/json"\n')
-  const request = new Request(spaceXUri, {
-    method,
-    headers,
-    body: String.UTF8.encode(query),
-  })
-  Console.log('Created request: ' + body + '\n')
-  Console.log('Request text again: ' + body + '\n')
+interface doRequestParams {
+  uri: string
+  method: string
+  backend: string
+  body: string | null
+  headers: Headers | null
+}
+
+function doRequest(method: string, uri: string, backend: string, headers: Headers = new Headers(), body: string = ''): Response {
+  const init: RequestInit = {
+    method: method,
+    headers: headers || new Headers(),
+    body: String.UTF8.encode(body),
+  }
+  Console.log('Created request\n')
   Console.log('Request method: ' + method + '\n')
-  Console.log('Request URL: ' + url + '\n')
-  Console.log('Sending request to backend "' + BACKEND_SPACEX + '"\n')
-  let response = Fastly.fetch(request, {
-    backend: BACKEND_SPACEX,
+  Console.log('Request URL: ' + uri + '\n')
+  Console.log('Sending request to backend "' + backend + '"\n')
+  const request = new Request(uri, init)
+  return Fastly.fetch(request, {
+    backend: backend,
     cacheOverride: null,
   }).wait()
-  Console.log('Response complete\n')
+}
+
+function testRequestN2YO(): string {
+  Console.log('test request for n2yo\n')
+  const uri = n2yoUri + '/tle/39500?apiKey=' + n2yoApiKey
+
+  const response = doRequest('GET', uri, BACKEND_N2YO)
+  return response.text()
+}
+
+function testRequestSpaceX(): string {
+  Console.log('test request for spacex\n')
+  const body =
+    '{"query":"{ payload(id: \\"Thaicom 6\\") { norad_id } }","variables":{}}'
+  Console.log('query: ' + body + '\n')
+  const headers = new Headers()
+  headers.set('Content-Type', 'application/json')
+  const response = doRequest('POST', spaceXUri, BACKEND_SPACEX, headers, body)
   const status = response.status()
   const statusText = response.statusText()
   const response_text = response.text()
@@ -167,24 +187,6 @@ function testRequestSpaceX(): string {
   }
   Console.log('Response text: ' + response_text)
   return response_text
-}
-
-function testRequestN2YO(): string {
-  Console.log('test request for n2yo\n')
-  const uri = n2yoUri + '/tle/39500?apiKey=' + n2yoApiKey
-  const method = 'GET'
-  const headers = new Headers()
-  const request = new Request(uri, { method, headers })
-  Console.log('Created request\n')
-  Console.log('Request method: ' + method + '\n')
-  Console.log('Request URL: ' + uri + '\n')
-  Console.log('Sending request to backend "' + BACKEND_N2YO + '"\n')
-  const response = Fastly.fetch(request, {
-    backend: BACKEND_N2YO,
-    cacheOverride: null,
-  })
-  Console.log('Response pending\n')
-  return response.wait().text()
 }
 
 class SpaceXPlotter {
