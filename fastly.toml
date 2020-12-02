@@ -1,6 +1,6 @@
-version = 52
+version = 56
 name = "SpaceX Plotter (POC)"
-description = "Get to know the Fastly Compute@Edge environment with a basic starter that demonstrates routing, simple synthetic responses and overriding caching rules."
+description = "Proof of concept application demonstrating interfacing of two HTTP APIs"
 authors = ["christopher.peters+fastlyce@cbsinteractive.com"]
 language = "assemblyscript"
 service_id = "1SMGMYuaK45wCXlU0v5R5u"
