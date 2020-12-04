@@ -19,6 +19,7 @@ const BACKEND_N2YO = 'n2yo'
 const n2yoApiKey = 'YBLNQJ-JUG3KB-XS5BRT-1JX2'
 const spaceXUri = 'https://api.spacex.land/graphql/'
 const n2yoUri = 'https://api.n2yo.com/rest/v1/satellite/'
+
 // The entry point for your application.
 //
 // Use this function to define your main request handling logic. It could be
@@ -44,6 +45,10 @@ function main(req: Request): Response {
   debug('Host: ' + host)
   debug('Path: ' + path)
 
+  let limit: i32 = 0
+  if (req.headers().has('x-payload-limit')) {
+    limit = <i32>Number.parseInt(<string>req.headers().get('x-payload-limit'))
+  }
   if (urlParts[0] == 'tle') {
     if (urlParts.length < 2) {
       urlParts.push('')
@@ -54,7 +59,7 @@ function main(req: Request): Response {
       debug('Initializing plotter')
       const plotter = new SpaceXPlotter(n2yoApiKey)
       debug('Initialized plotter')
-      const payloadTLEs = plotter.payloadTLEs(missionId)
+      const payloadTLEs = plotter.payloadTLEs(missionId, limit)
       const responseObj = new JSON.Obj()
       const missionObj = new JSON.Obj()
       const payloadsArr = new JSON.Arr()
@@ -169,10 +174,13 @@ class SpaceXPlotter {
    * @param missionId
    * @returns Map of payload ID to TLE array
    */
-  public payloadTLEs(missionId: string): PayloadTLEs | null {
+  public payloadTLEs(
+    missionId: string,
+    payloadLimit: i32 = 0
+  ): PayloadTLEs | null {
     Console.log('Request paylod TLEs for mission "' + missionId + '"\n')
     this._lastError = null
-    const payloadIds = this.payloadIds(missionId)
+    const payloadIds = this.payloadIds(missionId, payloadLimit)
     if (payloadIds) {
       const payloadTLEs = new Map<string, string[]>()
       for (let i = 0; i < payloadIds.length; i++) {
@@ -238,8 +246,8 @@ class SpaceXPlotter {
     return tles
   }
 
-  public payloadIds(missionId: string): string[] | null {
-    Console.log('Request paylod IDs for mission "' + missionId + '"\n')
+  public payloadIds(missionId: string, limit: i32): string[] | null {
+    debug('Request paylod IDs for mission "' + missionId)
     this._lastError = null
     const res = this.spacexRequest(
       '{ mission(id: "' + missionId + '") { payloads { id } } }'
@@ -247,15 +255,15 @@ class SpaceXPlotter {
     if (!res) {
       const err = this.lastError()
       if (err) {
-        Console.log('ERROR: ' + err.toString() + '\n')
+        error(err.toString())
       } else {
-        Console.log('No payload IDs found\n')
+        info('No payload IDs found')
       }
       return null
     }
     const data = res.get('data')
     if (!data) {
-      Console.log('ERROR: SpaceX response missing "data" field\n')
+      fatal('SpaceX response missing "data" field')
       this._lastError = new _Error('"data" field missing in SpaceX response')
       return null
     }
@@ -264,24 +272,30 @@ class SpaceXPlotter {
       if (mission.has('payloads')) {
         const payloads = <JSON.Arr>mission.get('payloads')
         debug('payloads internal array: ' + payloads._arr.toString())
-        const payloadIds: string[] = payloads._arr.map<string>(
-          (val: JSON.Value) => {
+        if (payloads._arr.includes(new JSON.Null())) {
+          debug('Mission contains null payloads')
+        }
+        let payloadIds: string[] = payloads._arr
+          .map<string>((val: JSON.Value) => {
             const obj = <JSON.Obj>val
             const payloadId = (<JSON.Str>obj.get('id'))._str
             return payloadId
-          }
-        )
-        Console.log(
+          })
+          .filter((payloadId) => !!payloadId)
+        if (limit) {
+          info('Limit to ' + limit.toString() + ' payloads')
+          payloadIds = payloadIds.slice(0, limit)
+        }
+        debug(
           payloadIds.length.toString() +
-            ' payload IDs found: ' +
-            payloadIds.toString() +
-            '\n'
+            ' non-null payload IDs found: ' +
+            payloadIds.toString()
         )
         return payloadIds
       }
-      Console.log('No payload IDs found\n')
+      info('No payload IDs found')
     }
-    Console.log('WARNING: No "mission" in SpaceX response')
+    warn('No "mission" in SpaceX response')
     return null
   }
 
@@ -292,7 +306,7 @@ class SpaceXPlotter {
    * @returns Array of NORAD IDs. Null can indicate both 'no IDs found' and an error; check @see lastError() to see what's what
    */
   public noradIds(payloadId: string): i64[] | null {
-    Console.log('Request NORAD IDs for payload "' + payloadId + '"\n')
+    debug('Request NORAD IDs for payload "' + payloadId)
     this._lastError = null
     const res = this.spacexRequest(
       '{ payload(id: "' + payloadId + '") { norad_id } }'
@@ -300,15 +314,15 @@ class SpaceXPlotter {
     if (!res) {
       const err = this.lastError()
       if (err) {
-        Console.log('ERROR: ' + err.toString() + '\n')
+        error(err.toString())
       } else {
-        Console.log('No NORAD IDs found\n')
+        info('No NORAD IDs found')
       }
       return null
     }
     const data = res.get('data')
     if (!data) {
-      Console.log('ERROR: SpaceX response missing "data" field\n')
+      fatal('ERROR: SpaceX response missing "data" field\n')
       this._lastError = new _Error('"data" field missing in SpaceX response')
       return null
     }
@@ -319,17 +333,16 @@ class SpaceXPlotter {
         const noradIds: i64[] = norad_ids._arr.map<i64>(
           (val: JSON.Value) => (<JSON.Num>val)._num
         )
-        Console.log(
+        debug(
           noradIds.length.toString() +
             ' NORAD IDs found: ' +
-            noradIds.toString() +
-            '\n'
+            noradIds.toString()
         )
         return noradIds
       }
-      Console.log('No NORAD IDs found\n')
+      info('No NORAD IDs found')
     }
-    Console.log('WARNING: No "payload" in SpaceX response')
+    warn('WARNING: No "payload" in SpaceX response')
     return null
   }
 
@@ -340,7 +353,7 @@ class SpaceXPlotter {
    * @returns the TLEs as an array of strings.
    */
   public tles(noradId: i64): string[] | null {
-    Console.log('Request TLEs for NORAD ID ' + noradId.toString() + '\n')
+    debug('Request TLEs for NORAD ID ' + noradId.toString())
     const path = 'tle/' + noradId.toString()
     const res = this.n2yoRequest(path)
     if (!res) {
@@ -354,29 +367,22 @@ class SpaceXPlotter {
     }
     const tle = <JSON.Str>res.get('tle')
     if (!tle) {
-      Console.log('ERROR: N2YO response missing "tle" field\n')
+      fatal('ERROR: N2YO response missing "tle" field')
       this._lastError = new _Error('"tle" field missing in N2YO response')
       return null
     }
-    const tleStr = tle._str // _str gives the unencoded string
-    Console.log('Got TLEs: "' + tleStr + '"\n')
-    const arr = tleStr.split('\r\n')
-    for (let i = 0; i < arr.length; i++) {
-      Console.log('TLE ' + i.toString() + ': "' + arr[i] + '"\n')
-    }
+    const arr = tle._str.split('\r\n')
     return arr
   }
 
   private n2yoRequest(path: string): JSON.Obj | null {
-    Console.log('Request path "' + path + '" from N2YO API\n')
+    debug('Request path "' + path + '" from N2YO API')
     const uri = n2yoUri + path + '?apiKey=' + n2yoApiKey
 
     const result = this.request('GET', uri, BACKEND_N2YO)
     const status = result.status
-    const statusText = result.statusText
-    const responseText: string = <string>(result.text || '')
-    debug('N2YO response text: ' + responseText)
     if (status != 200) {
+      const statusText = result.statusText
       let message =
         'Remote ' +
         BACKEND_N2YO +
@@ -399,7 +405,7 @@ class SpaceXPlotter {
    * @returns Instance of @see JSON Obj corresponding to the server response
    */
   private spacexRequest(query: string): JSON.Obj | null {
-    Console.log('Request query "' + query + '" from SpaceX API\n')
+    debug('Request query "' + query + '" from SpaceX API')
     const headers = new Headers()
     headers.set('Content-Type', 'application/json')
     const queryObj = new JSON.Obj()
@@ -413,10 +419,8 @@ class SpaceXPlotter {
       queryObj.toString()
     )
     const status = result.status
-    const statusText = result.statusText
-    const responseText: string = <string>(result.text || '')
-    debug('SpaceX response text: ' + responseText)
     if (status != 200) {
+      const statusText = result.statusText
       let message =
         'Remote ' +
         BACKEND_SPACEX +
@@ -428,8 +432,9 @@ class SpaceXPlotter {
       return null
     }
     if (!result.json) {
+      let resultText: string = result.text != null ? <string>result.text : ''
       this._lastError = new _Error(
-        'Remote did not respond with JSON. Response text: ' + responseText
+        'Remote did not respond with JSON. Response text: ' + resultText
       )
     }
     return result.json
@@ -447,23 +452,23 @@ class SpaceXPlotter {
       headers: headers || new Headers(),
       body: String.UTF8.encode(body),
     }
-    Console.log('Created request\n')
-    Console.log('Request method: ' + method + '\n')
-    Console.log('Request URL: ' + uri + '\n')
-    Console.log('Sending request to backend "' + backend + '"\n')
+    debug('(' + backend + ') ' + method + ' ' + uri)
     const request = new Request(uri, init)
+    debug('Fetching request')
     const response = Fastly.fetch(request, {
       backend: backend,
       cacheOverride: null,
     }).wait()
+    debug('(' + backend + ') Request successful')
     const response_text = response.text()
+    debug('(' + backend + ') Response text: ' + response_text)
     const response_headers = response.headers()
-    const keys = response_headers.keys()
-    for (let i = 0; i < keys.length; i++) {
-      let key: string = keys[i]
-      const val: string = <string>(response_headers.get(key) || '')
-      Console.log('Response header "' + key + '": "' + val + '"\n')
-    }
+    // const keys = response_headers.keys()
+    // for (let i = 0; i < keys.length; i++) {
+    //   let key: string = keys[i]
+    //   const val: string = <string>(response_headers.get(key) || '')
+    //   Console.log('Response header "' + key + '": "' + val + '"\n')
+    // }
 
     const result: RequestResult = {
       json: null,
