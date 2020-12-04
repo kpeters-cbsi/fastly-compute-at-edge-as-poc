@@ -26,81 +26,96 @@ const n2yoUri = 'https://api.n2yo.com/rest/v1/satellite/'
 // the request to a backend, make completely new requests, and/or generate
 // synthetic responses.
 function main(req: Request): Response {
-  // Make any desired changes to the client request.
-  Console.log('Request URL: ' + req.url() + '\n')
-  //  req.headers().set('Host', 'example.com')
+  debug('Request: ' + req.method() + ' ' + req.url())
 
-  //throw new Error('THIS IS AN ERROR')
+  Console.error('This is a test error\n')
 
   // We can filter requests that have unexpected methods.
   const VALID_METHODS = ['GET']
   if (!VALID_METHODS.includes(req.method())) {
-    Console.log('Invalid method "' + req.method() + '"' + '\n')
-    return new Response(String.UTF8.encode('This method is not allowed'), {
-      status: 405,
-      url: null,
-      headers: null,
-    })
+    info('Request method "' + req.method() + '" is invalid')
+    return response('This method is not allowed', 405)
   }
-  Console.log('Valid method (' + req.method() + ')' + '\n')
-  //  return new Response(String.UTF8.encode(plotter.noradIds('Thaicom 6')), {
-  //    status: 200,
-  //  })
 
   const urlParts = req.url().split('//').pop().split('/')
   let host = urlParts.shift()
   let path = '/' + urlParts.join('/')
-  Console.log('URL parts: ' + urlParts.toString() + '\n')
-  Console.log('Host: ' + host + '\n')
-  Console.log('Path: ' + path + '\n')
+  debug('URL parts: ' + urlParts.toString())
+  debug('Host: ' + host)
+  debug('Path: ' + path)
 
-  if (urlParts[0] == 'test') {
-    Console.log('Responding with test data')
+  if (urlParts[0] == 'tle') {
     if (urlParts.length < 2) {
       urlParts.push('')
     }
-    const response = handleTest(urlParts[1])
-    return response
-  } else {
-    const missionId = 'F4F83DE'
-    Console.log('initializing plotter' + '\n')
-    const plotter = new SpaceXPlotter(n2yoApiKey)
-    Console.log('initialized plotter' + '\n')
-    const payloadTLEs = plotter.payloadTLEs(missionId)
-    if (payloadTLEs) {
-      Console.log('Got Payload TLEss\n')
-      const obj = new JSON.Obj()
-      const payloadIDs = payloadTLEs.keys()
-      for (let i = 0; i < payloadIDs.length; i++) {
-        const payloadId = payloadIDs[i]
-        const arr = new JSON.Arr()
-        const tles = payloadTLEs.get(payloadId)
-        for (let j = 0; j < tles.length; j++) {
-          arr.push(new JSON.Str(tles[j]))
+    const missionId = urlParts[1]
+    if (missionId) {
+      info('Request TLEs for mission ID "' + missionId + '"')
+      debug('Initializing plotter')
+      const plotter = new SpaceXPlotter(n2yoApiKey)
+      debug('Initialized plotter')
+      const payloadTLEs = plotter.payloadTLEs(missionId)
+      const responseObj = new JSON.Obj()
+      const missionObj = new JSON.Obj()
+      const payloadsArr = new JSON.Arr()
+      missionObj.set('id', missionId)
+      responseObj.set('mission', missionObj)
+      if (payloadTLEs) {
+        debug('Got Payload TLEs\n')
+        const payloadIDs = payloadTLEs.keys()
+
+        for (let i = 0; i < payloadIDs.length; i++) {
+          const payloadObj = new JSON.Obj()
+          const payloadId = payloadIDs[i]
+          payloadObj.set('id', payloadId)
+          payloadObj.set('tles', JSON.from(payloadTLEs.get(payloadId)))
+          payloadsArr.push(payloadObj)
         }
-        obj.set(payloadId, arr)
-      }
-      return new Response(String.UTF8.encode(obj.toString()), {
-        status: 200,
-        headers: headers([['Content-Type', 'application/json']]),
-        url: null,
-      })
-    } else {
-      const err = plotter.lastError()
-      if (!err) {
-        return new Response(
-          String.UTF8.encode('No TLEs found for mission "' + missionId + '"'),
-          {
-            status: 404,
-            headers: null,
-            url: null,
-          }
-        )
       } else {
-        return new Response(String.UTF8.encode(err.toString()), { status: 500 })
+        const err = plotter.lastError()
+        if (err) {
+          return internalServerError(err.toString())
+        }
       }
+      responseObj.set('payloads', payloadsArr)
+      return ok(responseObj.toString())
     }
   }
+
+  return badRequest()
+}
+
+function ok(body: string, headers: Headers = new Headers()): Response {
+  return response(body, 200, headers)
+}
+
+function badRequest(body: string = 'Unsupported request'): Response {
+  return response(body, 400)
+}
+
+function notFound(
+  body: string = 'The requested resource was not found'
+): Response {
+  return response(body, 404)
+}
+
+function internalServerError(
+  body: string = 'There was an internal error'
+): Response {
+  return response(body, 500)
+}
+
+function response(
+  body: string,
+  status: u16,
+  headers: Headers = new Headers(),
+  url: string | null = null
+): Response {
+  return new Response(String.UTF8.encode(body), {
+    status,
+    url,
+    headers,
+  })
 }
 
 // Get the request from the client.
@@ -111,123 +126,6 @@ let resp = main(req)
 
 // Send the response back to the client.
 Fastly.respondWith(resp)
-
-function handleTest(type: string): Response {
-  let text: string
-  if (type == 'n2yo') {
-    Console.log('Requesting N2YO test\n')
-    text = testRequestN2YO()
-    Console.log('N2YO request successful')
-  } else if (type == '/spacex') {
-    Console.log('Requesting SpaceX test\n')
-    text = testRequestSpaceX()
-    Console.log('SpaceX request successful\n')
-  } else {
-    return new Response(
-      String.UTF8.encode('Unrecognized test: "' + type + '"'),
-      { status: 400 }
-    )
-  }
-  Console.log('Text: ' + text)
-  const parsed = <JSON.Obj>JSON.parse(text)
-  if (parsed.has('tle')) {
-    const tle = <string>parsed.get('tle')!.toString()
-    Console.log('tle: ' + tle + '\n')
-    return new Response(String.UTF8.encode(tle), {
-      status: 200,
-    })
-  } else if (parsed.has('data')) {
-    const data = <JSON.Obj>parsed.get('data')
-    const payload = <JSON.Obj>data.get('payload')
-    if (payload) {
-      if (payload.has('norad_id')) {
-        const norad_ids = <JSON.Arr>payload.get('norad_id')
-        Console.log('norad ID 0: ' + norad_ids._arr[0].toString() + '\n')
-        Console.log(
-          'norad ID 0 + 1: ' +
-            (Number.parseInt(norad_ids._arr[0].toString()) + 1).toString() +
-            '\n'
-        )
-        if (Array.isArray(norad_ids)) {
-          Console.log(`norad ids is an array\n`)
-        } else {
-          Console.log(`norad ids is not an array\n`)
-        }
-        return new Response(String.UTF8.encode(norad_ids.toString()), {
-          status: 200,
-        })
-      }
-    }
-  }
-  return new Response(String.UTF8.encode(text), {
-    status: 200,
-  })
-}
-
-function doRequest(
-  method: string,
-  uri: string,
-  backend: string,
-  headers: Headers = new Headers(),
-  body: string = ''
-): Response {
-  const init: RequestInit = {
-    method: method,
-    headers: headers || new Headers(),
-    body: String.UTF8.encode(body),
-  }
-  Console.log('Created request\n')
-  Console.log('Request method: ' + method + '\n')
-  Console.log('Request URL: ' + uri + '\n')
-  Console.log('Sending request to backend "' + backend + '"\n')
-  const request = new Request(uri, init)
-  return Fastly.fetch(request, {
-    backend: backend,
-    cacheOverride: null,
-  }).wait()
-}
-
-function testRequestN2YO(): string {
-  Console.log('test request for n2yo\n')
-  const uri = n2yoUri + '/tle/39500?apiKey=' + n2yoApiKey
-
-  const response = doRequest('GET', uri, BACKEND_N2YO)
-  return response.text()
-}
-
-function testRequestSpaceX(): string {
-  Console.log('test request for spacex\n')
-  const body =
-    '{"query":"{ payload(id: \\"Thaicom 6\\") { norad_id } }","variables":{}}'
-  Console.log('query: ' + body + '\n')
-  const headers = new Headers()
-  headers.set('Content-Type', 'application/json')
-  const response = doRequest('POST', spaceXUri, BACKEND_SPACEX, headers, body)
-  const status = response.status()
-  const statusText = response.statusText()
-  const response_text = response.text()
-  if (status != 200) {
-    Console.log(
-      'Response failed. Remote responded with: ' +
-        '"' +
-        status.toString() +
-        ' ' +
-        statusText +
-        '"\n'
-    )
-    Console.log('Response text: ' + response_text)
-    throw new _Error(
-      'Remote responded with: ' +
-        '"' +
-        status.toString() +
-        ' ' +
-        statusText +
-        '"'
-    )
-  }
-  Console.log('Response text: ' + response_text)
-  return response_text
-}
 
 type HeaderArray = Array<string[]>
 
