@@ -7,13 +7,15 @@ import {
 } from '@fastly/as-compute'
 import { JSON } from './lib/assemblyscript-json'
 import { Console } from 'as-wasi'
-// The name of a backend server associated with this service.
-//
-// This should be changed to match the name of your own backend. See the the
-// `Hosts` section of the Fastly Wasm service UI for more information.
-const BACKEND_SPACEX = 'SpaceX'
 
-/// The name of a second backend associated with this service.
+/**
+ * Maximum number of payloads to return for a given misison
+ *
+ * Necessary because Fastly imposes a limit of 8 requests / execution
+ */
+const PAYLOAD_LIMIT = 3
+
+const BACKEND_SPACEX = 'SpaceX'
 const BACKEND_N2YO = 'n2yo'
 
 const n2yoApiKey = 'YBLNQJ-JUG3KB-XS5BRT-1JX2'
@@ -45,7 +47,7 @@ function main(req: Request): Response {
   debug('Host: ' + host)
   debug('Path: ' + path)
 
-  let limit: i32 = 0
+  let limit: i32 = PAYLOAD_LIMIT
   if (req.headers().has('x-payload-limit')) {
     limit = <i32>Number.parseInt(<string>req.headers().get('x-payload-limit'))
   }
@@ -183,35 +185,44 @@ class SpaceXPlotter {
     const payloadIds = this.payloadIds(missionId, payloadLimit)
     if (payloadIds) {
       const payloadTLEs = new Map<string, string[]>()
+      if (payloadLimit) {
+        info('Limit TLEs to ' + payloadLimit.toString() + ' payloads')
+      } else {
+        payloadLimit = payloadIds.length
+      }
       for (let i = 0; i < payloadIds.length; i++) {
         const payloadId = payloadIds[i]
-        const noradIds = this.noradIds(payloadId)
-        if (noradIds) {
-          const tles = this.getTLEsForNoradIds(noradIds)
-          if (!tles) {
-            return null
-          }
-          payloadTLEs.set(payloadId, tles)
-        } else {
-          if (this.lastError()) {
-            return null
+        if (i < payloadLimit) {
+          const noradIds = this.noradIds(payloadId)
+          if (noradIds) {
+            const tles = this.getTLEsForNoradIds(noradIds)
+            if (!tles) {
+              return null
+            }
+            payloadTLEs.set(payloadId, tles)
           } else {
-            Console.log(
-              'ERROR: No NORAD IDs for payload ' +
-                payloadId +
-                ' (mission ' +
-                missionId +
-                ')\n'
-            )
-            this._lastError = new _Error(
-              'No NORAD IDs for payload ' +
-                payloadId +
-                ' (mission ' +
-                missionId +
-                ')'
-            )
-            return null
+            if (this.lastError()) {
+              return null
+            } else {
+              Console.log(
+                'ERROR: No NORAD IDs for payload ' +
+                  payloadId +
+                  ' (mission ' +
+                  missionId +
+                  ')\n'
+              )
+              this._lastError = new _Error(
+                'No NORAD IDs for payload ' +
+                  payloadId +
+                  ' (mission ' +
+                  missionId +
+                  ')'
+              )
+              return null
+            }
           }
+        } else {
+          payloadTLEs.set(payloadId, [])
         }
       }
       return payloadTLEs
@@ -282,10 +293,6 @@ class SpaceXPlotter {
             return payloadId
           })
           .filter((payloadId) => !!payloadId)
-        if (limit) {
-          info('Limit to ' + limit.toString() + ' payloads')
-          payloadIds = payloadIds.slice(0, limit)
-        }
         debug(
           payloadIds.length.toString() +
             ' non-null payload IDs found: ' +
@@ -379,7 +386,9 @@ class SpaceXPlotter {
     debug('Request path "' + path + '" from N2YO API')
     const uri = n2yoUri + path + '?apiKey=' + n2yoApiKey
 
-    const result = this.request('GET', uri, BACKEND_N2YO)
+    const override = new Fastly.CacheOverride()
+    override.setPass()
+    const result = this.request('GET', uri, BACKEND_N2YO, null, null, override)
     const status = result.status
     if (status != 200) {
       const statusText = result.statusText
@@ -444,20 +453,24 @@ class SpaceXPlotter {
     method: string,
     uri: string,
     backend: string,
-    headers: Headers = new Headers(),
-    body: string = ''
+    headers: Headers | null = null,
+    body: string | null = null,
+    cacheOverride: Fastly.CacheOverride | null = null
   ): RequestResult {
     const init: RequestInit = {
       method: method,
-      headers: headers || new Headers(),
-      body: String.UTF8.encode(body),
+      headers: headers,
+      body: null,
+    }
+    if (body) {
+      init.body = String.UTF8.encode(body)
     }
     debug('(' + backend + ') ' + method + ' ' + uri)
     const request = new Request(uri, init)
     debug('Fetching request')
     const response = Fastly.fetch(request, {
       backend: backend,
-      cacheOverride: null,
+      cacheOverride,
     }).wait()
     debug('(' + backend + ') Request successful')
     const response_text = response.text()
